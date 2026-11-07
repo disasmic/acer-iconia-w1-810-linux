@@ -1,0 +1,32 @@
+#!/usr/bin/python3
+"""Long press on the touchscreen -> right click (sent when the finger is lifted)."""
+import time, evdev
+from evdev import ecodes as e
+
+HOLD = 0.6   # seconds to hold
+MOVE = 15    # allowed finger movement, px
+
+dev = next(d for d in map(evdev.InputDevice, evdev.list_devices()) if "Goodix" in d.name)
+ui = evdev.UInput({e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT], e.EV_REL: [e.REL_X, e.REL_Y]},
+                  name="longpress-rightclick")
+t0 = x0 = y0 = None
+x = y = 0
+moved = multi = False
+
+for ev in dev.read_loop():
+    if ev.type == e.EV_ABS:
+        if ev.code == e.ABS_X: x = ev.value
+        elif ev.code == e.ABS_Y: y = ev.value
+        elif ev.code == e.ABS_MT_SLOT and ev.value > 0: multi = True
+    elif ev.type == e.EV_KEY and ev.code == e.BTN_TOUCH:
+        if ev.value == 1:
+            t0, x0, moved, multi = time.monotonic(), None, False, False
+        elif t0 is not None:
+            if not moved and not multi and time.monotonic() - t0 >= HOLD:
+                time.sleep(0.05)  # let X handle the left-button release first
+                for v in (1, 0):
+                    ui.write(e.EV_KEY, e.BTN_RIGHT, v); ui.syn()
+            t0 = None
+    elif ev.type == e.EV_SYN and t0 is not None:
+        if x0 is None: x0, y0 = x, y
+        elif abs(x - x0) > MOVE or abs(y - y0) > MOVE: moved = True

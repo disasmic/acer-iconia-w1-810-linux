@@ -1,0 +1,1 @@
+ACTION=="add|change", KERNEL=="event*", ATTRS{name}=="Goodix Capacitive TouchScreen", ENV{LIBINPUT_CALIBRATION_MATRIX}="0.99332 -0.01001 0.00844 0.00468 1.00676 -0.01496"
