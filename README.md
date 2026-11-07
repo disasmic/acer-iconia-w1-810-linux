@@ -114,7 +114,7 @@ Then log in again.
 - enables onboard in the Xfce session and Firefox accessibility.
 
 `setup-user.sh` (in the session):
-- touch-friendly double tap (30 px / 500 ms instead of 5 px / 400 ms);
+- tap to open on the desktop and in Thunar; easier double click for other apps (30 px / 500 ms);
 - onboard auto-show settings.
 
 Then connect to Wi-Fi from the panel icon.
@@ -122,6 +122,7 @@ Then connect to Wi-Fi from the panel icon.
 ## Notes
 
 - **Touch calibration** in `config/99-touch-calibration.rules` was measured on one unit (it fixed a ~12 px vertical offset). If taps feel off on your tablet, run `xinput_calibrator -v`, take the four click positions and fit a new `LIBINPUT_CALIBRATION_MATRIX`. Or delete the rule.
+- **Tap to open.** GTK3 turns touch events into emulated clicks but never into double clicks, so double tap can't open files. The desktop and Thunar use single-click mode instead, like phones and tablets: tap opens, long press opens the menu.
 - **Long press** sends the right click when you **lift** the finger after holding it still for 0.6 s.
 - **Onboard auto-show** needs `tablet-mode-detection-enabled=false`. Otherwise onboard waits for a tablet-mode switch this device doesn't have.
 - **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
@@ -136,8 +137,7 @@ scripts/autorotate               screen + touch rotation from accelerometer
 scripts/longpress-rightclick     long press -> right click (python3-evdev, uinput)
 scripts/lightdm-display-setup    LightDM hook: autorotate + login-screen keyboard
 scripts/lightdm-session-setup    LightDM hook: close login-screen keyboard at login
-scripts/iconia-display.sh        shared helper: stop helpers of one X display
-config/50-iconia.conf            LightDM: enables the two hooks
+scripts/iconia-display.sh        shared helper: stop helpers of one X displayconfig/50-iconia.conf            LightDM: enables the two hooks
 config/longpress-rightclick.service
 config/99-touch-calibration.rules
 config/zramswap

@@ -2,7 +2,12 @@
 # Per-user settings. Run as your normal user inside the XFCE session:  ./setup-user.sh
 set -eu
 
-# Touch-friendly double tap: fingers move more than the default 5 px between taps.
+# Touch model like on phones: tap opens, long press opens the menu.
+# (GTK3 never builds double clicks from touch events, so double tap can't work.)
+xfconf-query -c xfce4-desktop -p /desktop-icons/single-click -n -t bool -s true
+xfconf-query -c thunar -p /misc-single-click -n -t bool -s true
+xfconf-query -c thunar -p /misc-single-click-timeout -n -t uint -s 0   # no hover-select
+# Double click is still used by other apps; make it easier to hit with a finger.
 xfconf-query -c xsettings -p /Net/DoubleClickDistance -n -t int -s 30
 xfconf-query -c xsettings -p /Net/DoubleClickTime -n -t int -s 500
 
