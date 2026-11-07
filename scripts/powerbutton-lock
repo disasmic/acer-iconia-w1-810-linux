@@ -3,15 +3,15 @@
 
 Runs as root. Works on whichever X server is active: the user session, the login
 screen or the lock screen (LightDM starts the lock screen on its own X server).
-While the screen is off, the touchscreen and the volume buttons are grabbed
-(EVIOCGRAB), so their events reach neither X nor the long-press service and
-can't wake the screen.
+While the screen is off, the touch input (the "iconia-touch" mouse made by
+touch-gestures) and the volume buttons are grabbed (EVIOCGRAB), so their events
+don't reach X and can't wake the screen.
 `powerbutton-lock --toggle` performs one press (for testing; no touch grab).
 """
 import os, select, subprocess, sys, time, evdev
 from evdev import ecodes as e
 
-TOUCH = "Goodix"   # touchscreen name
+TOUCH = "iconia-touch"   # virtual mouse made by touch-gestures (it grabs the real touchscreen)
 
 
 def sh(*cmd, display=None):
@@ -69,12 +69,15 @@ if __name__ == "__main__":
     if "--toggle" in sys.argv:
         toggle()
         sys.exit()
-    devices = list(map(evdev.InputDevice, evdev.list_devices()))
-    keys = [d for d in devices if e.KEY_POWER in d.capabilities().get(e.EV_KEY, [])]
-    # Inputs that must not wake the screen: touchscreen and volume buttons.
-    quiet = [d for d in devices if TOUCH in d.name or
-             {e.KEY_VOLUMEUP, e.KEY_VOLUMEDOWN} & set(d.capabilities().get(e.EV_KEY, []))]
-    grabbed = False
+    def quiet_devices():
+        """Inputs that must not wake the screen: touch and volume buttons.
+        Looked up on every press, since touch-gestures may have been restarted."""
+        return [d for d in map(evdev.InputDevice, evdev.list_devices()) if d.name.startswith(TOUCH) or
+                {e.KEY_VOLUMEUP, e.KEY_VOLUMEDOWN} & set(d.capabilities().get(e.EV_KEY, []))]
+
+    keys = [d for d in map(evdev.InputDevice, evdev.list_devices())
+            if e.KEY_POWER in d.capabilities().get(e.EV_KEY, [])]
+    quiet, grabbed = [], False
     while True:
         watch = keys + quiet if grabbed else keys
         ready = select.select(watch, [], [], 1 if grabbed else None)[0]
@@ -87,5 +90,7 @@ if __name__ == "__main__":
         for dev in ready:
             for ev in dev.read():   # events of grabbed devices are read only to drain them
                 if dev in keys and ev.type == e.EV_KEY and ev.code == e.KEY_POWER and ev.value == 1:
+                    set_grab(quiet, False)
                     grabbed = toggle()
+                    quiet = quiet_devices() if grabbed else []
                     set_grab(quiet, grabbed)

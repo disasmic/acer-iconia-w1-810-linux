@@ -1,0 +1,260 @@
+#!/usr/bin/python3
+"""Touchscreen as a Mac-style touchpad: one finger = mouse, two fingers = scroll.
+
+The touchscreen is grabbed (EVIOCGRAB) and replaced by a virtual absolute mouse
+"iconia-touch". The left button is not pressed until it's clear what the finger does:
+  - lift quickly          -> left click (tap);
+  - move more than MOVE   -> left drag from the touch point (select, drag & drop);
+  - hold still for HOLD   -> right click only (no left button at all, so the lift
+                             can't click the item and a multi-selection is kept);
+  - second finger down    -> scrolling where the content follows the fingers:
+      * over Firefox: one real touch that follows the fingers is passed on
+        through a second virtual device "iconia-touch-mt", so Firefox pans
+        exactly 1:1 and flings like on a phone or iPad (two simultaneous
+        touches would start a pinch instead of a pan);
+      * elsewhere (GTK apps don't pan on touch): natural wheel scrolling scaled
+        to roughly 1:1 for GTK, with momentum after the fingers are lifted.
+
+Usage: touch-gestures [touchscreen-name [virtual-device-name]]   (for testing)
+"""
+import os, select, subprocess, sys, time, evdev
+from evdev import ecodes as e, AbsInfo
+
+NAME = sys.argv[1] if len(sys.argv) > 1 else "Goodix"
+OUT_NAME = sys.argv[2] if len(sys.argv) > 2 else "iconia-touch"
+W, H = 800, 1280              # touchscreen axes 0..W-1, 0..H-1 (portrait)
+HOLD = 0.6                    # s without moving = right click
+MOVE = 15                     # px of movement that starts a drag
+# GTK scrolls pow(page, 2/3) px per notch (~90 px for a full-screen view), so
+# 120/90 hi-res units per px of finger movement keeps the content under the fingers.
+SCROLL_GAIN = 1.3             # hi-res wheel units (120 = one notch) per px
+TOUCH_APPS = ("firefox",)     # WM_CLASS substrings of apps that pan on real touches
+FRICTION, MIN_SPEED = 0.92, 1.5   # momentum decay per frame, px/frame to stop
+FRAME = 1 / 60
+# Touch calibration measured on one unit (normalized coords): x' = a x + b y + c ...
+CAL = (0.99332, -0.01001, 0.00844, 0.00468, 1.00676, -0.01496)
+ROTATION_FILE = "/run/iconia-rotation"   # written by autorotate
+
+
+def find_device():
+    while True:
+        for path in evdev.list_devices():
+            dev = evdev.InputDevice(path)
+            if dev.name == NAME or (NAME == "Goodix" and NAME in dev.name):
+                return dev
+        time.sleep(1)
+
+
+def calibrate(x, y):
+    u, v = x / (W - 1), y / (H - 1)
+    a, b, c, d, f, g = CAL
+    u, v = a * u + b * v + c, d * u + f * v + g
+    return round(min(max(u, 0), 1) * (W - 1)), round(min(max(v, 0), 1) * (H - 1))
+
+
+def run(cmd, env=None):
+    return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=2).stdout.strip()
+
+
+def pointer_in_touch_app():
+    """True if the window under the pointer (on the active X display) pans on touch."""
+    try:
+        sid = run(["loginctl", "show-seat", "seat0", "-p", "ActiveSession", "--value"])
+        display = run(["loginctl", "show-session", sid, "-p", "Display", "--value"])
+        env = dict(os.environ, DISPLAY=display, XAUTHORITY=f"/var/run/lightdm/root/{display}")
+        loc = dict(kv.split("=", 1) for kv in run(["xdotool", "getmouselocation", "--shell"], env).split())
+        wm_class = run(["xprop", "-id", loc["WINDOW"], "WM_CLASS"], env).lower()
+        return any(app in wm_class for app in TOUCH_APPS)
+    except Exception:
+        return False
+
+
+def screen_delta(dx, dy):
+    """Touchscreen delta -> delta in screen orientation (see autorotate)."""
+    try:
+        rot = open(ROTATION_FILE).read().strip()
+    except OSError:
+        rot = "normal"
+    return {"left": (-dy, dx), "right": (dy, -dx), "inverted": (-dx, -dy)}.get(rot, (dx, dy))
+
+
+dev = find_device()
+dev.grab()
+ui = evdev.UInput({
+    e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT],
+    e.EV_ABS: [(e.ABS_X, AbsInfo(0, 0, W - 1, 0, 0, 0)), (e.ABS_Y, AbsInfo(0, 0, H - 1, 0, 0, 0))],
+    e.EV_REL: [e.REL_WHEEL, e.REL_HWHEEL, e.REL_WHEEL_HI_RES, e.REL_HWHEEL_HI_RES],
+}, name=OUT_NAME)
+mt = evdev.UInput({   # real touches for apps that pan on touch (see TOUCH_APPS)
+    e.EV_KEY: [e.BTN_TOUCH],
+    e.EV_ABS: [(e.ABS_X, AbsInfo(0, 0, W - 1, 0, 0, 0)), (e.ABS_Y, AbsInfo(0, 0, H - 1, 0, 0, 0)),
+               (e.ABS_MT_SLOT, AbsInfo(0, 0, 0, 0, 0, 0)),
+               (e.ABS_MT_TRACKING_ID, AbsInfo(0, 0, 65535, 0, 0, 0)),
+               (e.ABS_MT_POSITION_X, AbsInfo(0, 0, W - 1, 0, 0, 0)),
+               (e.ABS_MT_POSITION_Y, AbsInfo(0, 0, H - 1, 0, 0, 0))],
+}, name=OUT_NAME + "-mt", input_props=[e.INPUT_PROP_DIRECT])
+pan_pos = None        # [x, y] of the single mirrored touch
+pan_prev = {}         # finger positions in the previous frame
+pan_id = 0
+
+
+def pan_touch(event):
+    """Mirror one touch that follows the fingers: "down", "move" or "up".
+    It moves by the average movement of the fingers present in both frames,
+    so lifting one finger of two doesn't make it jump."""
+    global pan_pos, pan_prev, pan_id
+    if event == "down":
+        pan_pos, pan_id = list(centroid()), pan_id + 1
+        mt.write(e.EV_ABS, e.ABS_MT_TRACKING_ID, pan_id)
+    elif event == "move":
+        common = [s for s in slots if s in pan_prev]
+        if common:
+            pan_pos[0] += sum(slots[s][0] - pan_prev[s][0] for s in common) / len(common)
+            pan_pos[1] += sum(slots[s][1] - pan_prev[s][1] for s in common) / len(common)
+    pan_prev = {s: p[:] for s, p in slots.items()}
+    if event == "up":
+        mt.write(e.EV_ABS, e.ABS_MT_TRACKING_ID, -1)
+        mt.write(e.EV_KEY, e.BTN_TOUCH, 0)
+    else:
+        x, y = calibrate(*pan_pos)
+        for code, value in ((e.ABS_MT_POSITION_X, x), (e.ABS_MT_POSITION_Y, y), (e.ABS_X, x), (e.ABS_Y, y)):
+            mt.write(e.EV_ABS, code, value)
+        mt.write(e.EV_KEY, e.BTN_TOUCH, 1)
+    mt.syn()
+
+
+def move(x, y):
+    x, y = calibrate(x, y)
+    ui.write(e.EV_ABS, e.ABS_X, x); ui.write(e.EV_ABS, e.ABS_Y, y); ui.syn()
+
+
+def click(code, value):
+    ui.write(e.EV_KEY, code, value); ui.syn()
+
+
+wheel_acc = [0.0, 0.0, 0, 0]   # hi-res remainders (v, h), legacy accumulators (v, h)
+
+
+def scroll(sdx, sdy):
+    """Natural scrolling: fingers down -> content down -> wheel up (positive)."""
+    for i, (axis, legacy, amount) in enumerate(((e.REL_WHEEL_HI_RES, e.REL_WHEEL, sdy),
+                                                (e.REL_HWHEEL_HI_RES, e.REL_HWHEEL, -sdx))):
+        wheel_acc[i] += amount * SCROLL_GAIN
+        units = int(wheel_acc[i])
+        if not units:
+            continue
+        wheel_acc[i] -= units
+        ui.write(e.EV_REL, axis, units)
+        wheel_acc[i + 2] += units
+        notches = int(wheel_acc[i + 2] / 120)
+        if notches:
+            wheel_acc[i + 2] -= notches * 120
+            ui.write(e.EV_REL, legacy, notches)
+    ui.syn()
+
+
+slots = {}             # slot -> [x, y] of fingers currently down
+slot = 0
+state = "idle"         # idle | touch (1 finger, undecided) | drag | held | scroll | pan
+t0 = start = None      # time / position of the first finger
+last_c = None          # last two-finger centroid
+velocity = (0.0, 0.0)  # px per frame, for momentum
+momentum = False
+
+
+def first():
+    return next(iter(slots.values()))
+
+
+def centroid():
+    pts = list(slots.values())[:2]
+    return sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+
+
+def on_frame():
+    """Called after each SYN_REPORT with the current set of fingers."""
+    global state, t0, start, last_c, velocity, momentum
+    n = len(slots)
+    if state == "idle" and n:
+        momentum = False
+        state, t0, start = "touch", time.monotonic(), first()[:]
+        move(*start)
+    elif state == "touch":
+        if n >= 2:
+            if pointer_in_touch_app():
+                state = "pan"
+                pan_touch("down")
+            else:
+                state, last_c, velocity = "scroll", centroid(), (0.0, 0.0)
+        elif n == 0:                               # tap
+            click(e.BTN_LEFT, 1); click(e.BTN_LEFT, 0)
+            state = "idle"
+        elif abs(first()[0] - start[0]) > MOVE or abs(first()[1] - start[1]) > MOVE:
+            click(e.BTN_LEFT, 1)                   # drag from the touch point
+            move(*first())
+            state = "drag"
+    elif state == "drag":
+        if n == 0:
+            click(e.BTN_LEFT, 0)
+            state = "idle"
+        else:
+            move(*first())
+    elif state == "held":
+        if n == 0:
+            state = "idle"
+    elif state == "pan":       # a real touch; the app pans and flings itself
+        if n == 0:
+            pan_touch("up")
+            state = "idle"
+        else:
+            pan_touch("move")
+    elif state == "scroll":
+        if n >= 2:
+            c = centroid()
+            sdx, sdy = screen_delta(c[0] - last_c[0], c[1] - last_c[1])
+            velocity = (sdx, sdy)
+            scroll(sdx, sdy)
+            last_c = c
+        elif n == 0:
+            momentum = abs(velocity[0]) + abs(velocity[1]) > MIN_SPEED
+            state = "idle"
+        # one finger lifted: stay in scroll until all fingers are up
+
+
+def on_timer():
+    global state, velocity, momentum
+    if state == "touch" and time.monotonic() - t0 >= HOLD:
+        click(e.BTN_RIGHT, 1); click(e.BTN_RIGHT, 0)
+        state = "held"
+    if momentum:
+        velocity = (velocity[0] * FRICTION, velocity[1] * FRICTION)
+        if abs(velocity[0]) + abs(velocity[1]) < MIN_SPEED:
+            momentum = False
+        else:
+            scroll(*velocity)
+
+
+while True:
+    if momentum:
+        timeout = FRAME
+    elif state == "touch":
+        timeout = max(0.0, t0 + HOLD - time.monotonic())
+    else:
+        timeout = None
+    if select.select([dev], [], [], timeout)[0]:
+        for ev in dev.read():
+            if ev.type == e.EV_ABS:
+                if ev.code == e.ABS_MT_SLOT:
+                    slot = ev.value
+                elif ev.code == e.ABS_MT_TRACKING_ID:
+                    if ev.value < 0:
+                        slots.pop(slot, None)
+                    else:
+                        slots[slot] = list(slots.get(slot, [0, 0]))
+                elif ev.code == e.ABS_MT_POSITION_X and slot in slots:
+                    slots[slot][0] = ev.value
+                elif ev.code == e.ABS_MT_POSITION_Y and slot in slots:
+                    slots[slot][1] = ev.value
+            elif ev.type == e.EV_SYN and ev.code == e.SYN_REPORT:
+                on_frame()
+    on_timer()

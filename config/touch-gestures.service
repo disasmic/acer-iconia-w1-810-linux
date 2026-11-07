@@ -1,9 +1,9 @@
 [Unit]
-Description=Long press on touchscreen as right click
+Description=Touchscreen gestures: one finger = mouse, two fingers = scroll
 After=systemd-udev-settle.service
 
 [Service]
-ExecStart=/usr/local/bin/longpress-rightclick
+ExecStart=/usr/local/bin/touch-gestures
 Restart=on-failure
 RestartSec=3
 

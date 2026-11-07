@@ -12,9 +12,9 @@ Step-by-step install of Debian 12 (Xfce) on the Acer Iconia Tab 8 W1-810, plus t
 | Wi-Fi (BCM4330 SDIO) | ✅ | Prowise-PT301 NVRAM linked under the model name |
 | Bluetooth (BCM4330B1 UART) | ✅ | `BCM4330B1.hcd` patch from LibreELEC |
 | Sound (RT5640, speakers) | ✅ | `firmware-intel-sound` (kernel already has a W1-810 quirk) |
-| Touchscreen (Goodix) | ✅ | Works as is; optional calibration |
+| Touchscreen (Goodix) | ✅ | Like a Mac touchpad: one finger = mouse, two fingers = scroll (`scripts/touch-gestures`) |
 | Auto-rotation (BMA222E) | ✅ | `iio-sensor-proxy` + `scripts/autorotate`, also on login and lock screens |
-| Right click | ✅ | Long press, via `scripts/longpress-rightclick` |
+| Right click | ✅ | Long press (0.6 s) |
 | Power button | ✅ | Lock + screen off, like a phone (`scripts/powerbutton-lock`) |
 | Suspend (s2idle) | ❌ | Resumes with a black screen on kernel 6.1; not used |
 | On-screen keyboard | ✅ | `onboard` with auto-show in the session; docked keyboard on login and lock screens |
@@ -111,21 +111,25 @@ Then log in again.
 `setup.sh` (as root):
 - installs firmware and tools;
 - sets up Wi-Fi NVRAM and the Bluetooth patch (checksum-verified);
-- configures zram, touch calibration and the long-press service;
+- configures zram and the touch gesture service (with touch calibration);
 - installs LightDM hooks for auto-rotation and the login/lock-screen keyboard;
-- enables onboard in the Xfce session and Firefox accessibility.
+- enables onboard in the Xfce session; Firefox accessibility, XInput2 and wide scrollbars.
 
 `setup-user.sh` (in the session):
 - tap to open on the desktop and in Thunar; easier double click for other apps (30 px / 500 ms);
+- no saved sessions (a window manager crash at logout would otherwise stick);
 - onboard auto-show settings.
 
 Then connect to Wi-Fi from the panel icon.
 
 ## Notes
 
-- **Touch calibration** in `config/99-touch-calibration.rules` was measured on one unit (it fixed a ~12 px vertical offset). If taps feel off on your tablet, run `xinput_calibrator -v`, take the four click positions and fit a new `LIBINPUT_CALIBRATION_MATRIX`. Or delete the rule.
-- **Tap to open.** GTK3 turns touch events into emulated clicks but never into double clicks, so double tap can't open files. The desktop and Thunar use single-click mode instead, like phones and tablets: tap opens, long press opens the menu.
-- **Long press** sends the right click after the finger is held still for 0.6 s, **while it is still down**. The context menu opens and grabs the pointer, so lifting the finger doesn't "tap" the item (which would open it in single-click mode) and a multi-selection is kept.
+- **Touch gestures** (`scripts/touch-gestures`, root service). The touchscreen is grabbed and replaced by a virtual mouse `iconia-touch`. One finger is a mouse, but the left button is pressed only once it's clear what the finger does: a quick lift is a click, moving more than 15 px is a drag from the touch point (select text, rubber band), holding still for 0.6 s is a right click only. So a long press never clicks the item under the finger, and a multi-selection is kept. A second finger switches to scrolling where the content follows the fingers:
+  - over **Firefox**, one real touch following the fingers is passed on through a second virtual device `iconia-touch-mt`; Firefox (with `MOZ_USE_XINPUT2=1`) pans exactly 1:1 and flings. Two simultaneous touches would start a pinch instead of a pan, so only one is sent;
+  - elsewhere GTK apps don't pan on touch (Thunar drags, the terminal selects), so natural wheel scrolling is used, scaled to ~1:1 for GTK (one notch ≈ pow(page, 2/3) ≈ 90 px), with momentum.
+
+  The scroll direction follows the screen rotation (`autorotate` writes it to `/run/iconia-rotation`). The touch calibration (`CAL` in the script) was measured on one unit and fixed a ~12 px vertical offset.
+- **Tap to open.** The desktop and Thunar use single-click mode, like phones and tablets: tap opens, long press opens the menu.
 - **Onboard auto-show** needs `tablet-mode-detection-enabled=false`. Otherwise onboard waits for a tablet-mode switch this device doesn't have.
 - **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. There is no window manager on the login screen, so the keyboard grabs the input focus whenever it maps its window (start, rotation); a small loop gives the focus back to the greeter, otherwise a tap on a field shows no text cursor. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
 - **Power button.** Suspend is the only sleep state (`s2idle`), and after it the DSI panel stays black, so the button doesn't sleep. `powerbutton-lock` (root service) locks the session and turns the screen off; only another press turns it on, at the lock screen. While the screen is off, the touchscreen and volume buttons are grabbed (`EVIOCGRAB`), so they can't wake it or click anything. logind is set to `HandlePowerKey=ignore`, otherwise a press on the login screen powers the tablet off. X ignores the power key device (`axp20x-pek`), otherwise the key press itself wakes the blanked screen before the service acts, and the next press turns it on and right back off. The RTC has no wake alarm, so `rtcwake` can't be used for testing.
@@ -140,7 +144,7 @@ Then connect to Wi-Fi from the panel icon.
 setup.sh                         system setup (root)
 setup-user.sh                    per-user settings (inside Xfce session)
 scripts/autorotate               screen + touch rotation from accelerometer
-scripts/longpress-rightclick     long press -> right click (python3-evdev, uinput)
+scripts/touch-gestures           touch: one finger = mouse, two = scroll (python3-evdev, uinput)
 scripts/lightdm-display-setup    LightDM hook: autorotate + login-screen keyboard
 scripts/lightdm-session-setup    LightDM hook: close login-screen keyboard at login
 scripts/iconia-display.sh        shared helper: stop helpers of one X display
@@ -149,9 +153,9 @@ config/powerbutton-lock.service
 config/50-iconia-logind.conf     logind: don't power off on the power button
 config/iconia-backlight.conf     modprobe: load LPSS PWM before i915 (backlight)
 config/50-iconia-powerkey.conf   Xorg: ignore the power key (handled by the service)config/50-iconia.conf            LightDM: enables the two hooks
-config/longpress-rightclick.service
-config/99-touch-calibration.rules
+config/touch-gestures.service
 config/zramswap
 config/onboard-a11y.js           Firefox: force accessibility on
+config/firefox-tablet.js         Firefox: wide, always visible scrollbars
 config/onboard-xfce.desktop      Xfce autostart for onboard
 ```

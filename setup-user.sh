@@ -14,6 +14,11 @@ xfconf-query -c xsettings -p /Net/DoubleClickTime -n -t int -s 500
 # Power button is handled by the powerbutton-lock service; no logout dialog.
 xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action -n -t uint -s 0
 
+# Don't save/restore the session: if the window manager dies during logout, a
+# saved session would start the next login without it (no maximize, no frames).
+xfconf-query -c xfce4-session -p /general/SaveOnExit -n -t bool -s false
+rm -f "$HOME"/.cache/sessions/xfce4-session-*
+
 # Accessibility bus: lets onboard see which widget has focus.
 xfconf-query -c xfce4-session -p /general/StartAssistiveTechnologies -n -t bool -s true
 gsettings set org.gnome.desktop.interface toolkit-accessibility true

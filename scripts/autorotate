@@ -1,7 +1,10 @@
 #!/bin/sh
-# Rotate screen and touchscreen from the accelerometer (iio-sensor-proxy)
+# Rotate screen and touch input from the accelerometer (iio-sensor-proxy).
+# TOUCH is the virtual mouse made by touch-gestures (plus its "-mt" touchscreen
+# for real two-finger touches); the rotation is also written
+# to /run/iconia-rotation so touch-gestures scrolls in screen direction.
 OUT=DSI-1
-TOUCH="pointer:Goodix Capacitive TouchScreen"
+TOUCH="${TOUCH:-iconia-touch}"
 stdbuf -oL monitor-sensor | while read -r line; do
   case "$line" in
     *bottom-up*) R=inverted; M="-1 0 1 0 -1 1 0 0 1" ;;
@@ -16,5 +19,8 @@ stdbuf -oL monitor-sensor | while read -r line; do
           if ($i ~ /^[0-9]+x[0-9]+\+/) { print ($(i+1) ~ /^(left|right|inverted)$/ ? $(i+1) : "normal"); exit } }')
   # A mode set wakes a blanked screen (e.g. the lock screen), so skip it if nothing changes.
   [ "$CUR" = "$R" ] || xrandr --output "$OUT" --rotate "$R"
-  xinput set-prop "$TOUCH" "Coordinate Transformation Matrix" $M
+  for dev in "$TOUCH" "$TOUCH-mt"; do
+    xinput set-prop "$dev" "Coordinate Transformation Matrix" $M 2>/dev/null
+  done
+  echo "$R" > /run/iconia-rotation 2>/dev/null
 done

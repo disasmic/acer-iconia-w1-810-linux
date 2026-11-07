@@ -27,15 +27,12 @@ echo "grub-efi-ia32 grub2/force_efi_extra_removable boolean true" | debconf-set-
 install -m644 config/zramswap /etc/default/zramswap
 systemctl enable --now zramswap
 
-# Touchscreen calibration (values measured on one unit; see README).
-install -m644 config/99-touch-calibration.rules /etc/udev/rules.d/
-udevadm control --reload
-
-# Long press -> right click.
-install -m755 scripts/longpress-rightclick /usr/local/bin/
-install -m644 config/longpress-rightclick.service /etc/systemd/system/
+# Touch like a Mac touchpad: one finger = mouse (tap, drag, long press = right
+# click), two fingers = scroll. Also applies the touch calibration.
+install -m755 scripts/touch-gestures /usr/local/bin/
+install -m644 config/touch-gestures.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now longpress-rightclick
+systemctl enable --now touch-gestures
 
 # Backlight: acpi_video0 is not wired to the panel. Use the native i915 backlight
 # (intel_backlight), which needs the LPSS PWM driver loaded before i915.
@@ -83,7 +80,10 @@ HOME=/root dbus-run-session sh -c '
 # On-screen keyboard in the Xfce session.
 install -m644 config/onboard-xfce.desktop /etc/xdg/autostart/
 
-# Firefox: always expose accessibility so onboard can auto-show on text fields.
-install -m644 config/onboard-a11y.js /etc/firefox-esr/
+# Firefox: always expose accessibility so onboard can auto-show on text fields;
+# wide always-visible scrollbars; XInput2 so it gets the real touches that
+# touch-gestures passes on for 1:1 two-finger panning (read at login).
+install -m644 config/onboard-a11y.js config/firefox-tablet.js /etc/firefox-esr/
+grep -q '^MOZ_USE_XINPUT2=' /etc/environment || echo 'MOZ_USE_XINPUT2=1' >> /etc/environment
 
 echo "System part done. Reboot, log in, then run ./setup-user.sh inside the desktop session."
