@@ -1,0 +1,27 @@
+#!/bin/sh
+# LightDM display-setup-script (runs as root with DISPLAY/XAUTHORITY set).
+# Runs for every X server LightDM starts: the login screen, the user session,
+# and the lock screen (which gets its own X server, e.g. :1).
+# Starts auto-rotation and an on-screen keyboard for the login/lock screen.
+. /usr/local/lib/iconia-display.sh
+
+kill_on_display '^/bin/sh /usr/local/bin/autorotate'
+setsid /usr/local/bin/autorotate >/dev/null 2>&1 </dev/null &
+
+# Greeter keyboard: start after the greeter window is mapped (so it stays on top),
+# restart it if someone presses Quit, stop when this X server goes away.
+# HOME is needed to read root's onboard settings (docked, force-to-top, icon palette).
+export HOME=/root
+kill_on_display 'greeter-osk'
+setsid sh -c '# greeter-osk
+  for i in $(seq 60); do
+    xwininfo -root -children | grep "\"lightdm-gtk-greeter\"" | grep -vq " 10x10+" && break
+    sleep 1
+  done
+  sleep 2
+  while xwininfo -root >/dev/null 2>&1; do
+    dbus-run-session onboard
+    sleep 1
+  done
+' >/dev/null 2>&1 </dev/null &
+exit 0

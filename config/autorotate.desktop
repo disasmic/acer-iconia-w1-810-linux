@@ -1,5 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Autorotate
-Exec=/usr/local/bin/autorotate
-OnlyShowIn=XFCE;

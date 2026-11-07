@@ -13,9 +13,9 @@ Step-by-step install of Debian 12 (Xfce) on the Acer Iconia Tab 8 W1-810, plus t
 | Bluetooth (BCM4330B1 UART) | ✅ | `BCM4330B1.hcd` patch from LibreELEC |
 | Sound (RT5640, speakers) | ✅ | `firmware-intel-sound` (kernel already has a W1-810 quirk) |
 | Touchscreen (Goodix) | ✅ | Works as is; optional calibration |
-| Auto-rotation (BMA222E) | ✅ | `iio-sensor-proxy` + `scripts/autorotate` |
+| Auto-rotation (BMA222E) | ✅ | `iio-sensor-proxy` + `scripts/autorotate`, also on login and lock screens |
 | Right click | ✅ | Long press, via `scripts/longpress-rightclick` |
-| On-screen keyboard | ✅ | `onboard` with auto-show, also on the login screen |
+| On-screen keyboard | ✅ | `onboard` with auto-show in the session; docked keyboard on login and lock screens |
 | Cameras | ❌ | Not tested / no driver |
 
 ## Hardware quirks to know
@@ -109,8 +109,9 @@ Then log in again.
 `setup.sh` (as root):
 - installs firmware and tools;
 - sets up Wi-Fi NVRAM and the Bluetooth patch (checksum-verified);
-- configures zram, touch calibration, the long-press service and auto-rotation;
-- enables the on-screen keyboard on the login screen and Firefox accessibility.
+- configures zram, touch calibration and the long-press service;
+- installs LightDM hooks for auto-rotation and the login/lock-screen keyboard;
+- enables onboard in the Xfce session and Firefox accessibility.
 
 `setup-user.sh` (in the session):
 - touch-friendly double tap (30 px / 500 ms instead of 5 px / 400 ms);
@@ -123,6 +124,7 @@ Then connect to Wi-Fi from the panel icon.
 - **Touch calibration** in `config/99-touch-calibration.rules` was measured on one unit (it fixed a ~12 px vertical offset). If taps feel off on your tablet, run `xinput_calibrator -v`, take the four click positions and fit a new `LIBINPUT_CALIBRATION_MATRIX`. Or delete the rule.
 - **Long press** sends the right click when you **lift** the finger after holding it still for 0.6 s.
 - **Onboard auto-show** needs `tablet-mode-detection-enabled=false`. Otherwise onboard waits for a tablet-mode switch this device doesn't have.
+- **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
 - **Firmware blobs are not stored here.** They come from Debian packages, and the BT patch is downloaded from [LibreELEC/brcmfmac_sdio-firmware](https://github.com/LibreELEC/brcmfmac_sdio-firmware).
 
 ## Files
@@ -132,10 +134,13 @@ setup.sh                         system setup (root)
 setup-user.sh                    per-user settings (inside Xfce session)
 scripts/autorotate               screen + touch rotation from accelerometer
 scripts/longpress-rightclick     long press -> right click (python3-evdev, uinput)
+scripts/lightdm-display-setup    LightDM hook: autorotate + login-screen keyboard
+scripts/lightdm-session-setup    LightDM hook: close login-screen keyboard at login
+scripts/iconia-display.sh        shared helper: stop helpers of one X display
+config/50-iconia.conf            LightDM: enables the two hooks
 config/longpress-rightclick.service
 config/99-touch-calibration.rules
 config/zramswap
 config/onboard-a11y.js           Firefox: force accessibility on
-config/autorotate.desktop        Xfce autostart
-config/onboard-xfce.desktop      Xfce autostart
+config/onboard-xfce.desktop      Xfce autostart for onboard
 ```

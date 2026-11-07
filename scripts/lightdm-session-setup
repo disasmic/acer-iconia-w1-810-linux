@@ -1,0 +1,6 @@
+#!/bin/sh
+# LightDM session-setup-script (root, DISPLAY set): close the login-screen keyboard
+# on this display; the user session starts its own onboard with auto-show.
+. /usr/local/lib/iconia-display.sh
+kill_on_display 'greeter-osk'
+exit 0

@@ -10,6 +10,6 @@ stdbuf -oL monitor-sensor | while read -r line; do
     *normal*)    R=normal;   M="1 0 0 0 1 0 0 0 1" ;;
     *) continue ;;
   esac
-  xrandr --output "$OUT" --rotate "$R"
+  xrandr --output "$OUT" --rotate "$R" || exit 0   # X server is gone
   xinput set-prop "$TOUCH" "Coordinate Transformation Matrix" $M
 done
