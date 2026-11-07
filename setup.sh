@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 apt-get update
 apt-get install -y firmware-brcm80211 firmware-intel-sound zram-tools \
-    iio-sensor-proxy xinput x11-utils python3-evdev onboard at-spi2-core libglib2.0-bin \
+    iio-sensor-proxy xinput x11-utils xdotool python3-evdev onboard at-spi2-core libglib2.0-bin \
     dbus-daemon wget
 
 # Wi-Fi (BCM4330): the driver looks for an NVRAM file named after the DMI model.
@@ -36,6 +36,27 @@ install -m755 scripts/longpress-rightclick /usr/local/bin/
 install -m644 config/longpress-rightclick.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now longpress-rightclick
+
+# Backlight: acpi_video0 is not wired to the panel. Use the native i915 backlight
+# (intel_backlight), which needs the LPSS PWM driver loaded before i915.
+# Then turning the screen off (DPMS) also turns the backlight off.
+install -m644 config/iconia-backlight.conf /etc/modprobe.d/
+for m in pwm-lpss pwm-lpss-platform; do
+    grep -qx "$m" /etc/initramfs-tools/modules || echo "$m" >> /etc/initramfs-tools/modules
+done
+grep -q 'acpi_backlight=native' /etc/default/grub ||
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\(.*\)"/GRUB_CMDLINE_LINUX_DEFAULT="\1 acpi_backlight=native"/' /etc/default/grub
+update-initramfs -u
+update-grub
+
+# Power button like on a phone: lock + screen off. logind must not power off.
+# (Suspend/s2idle resumes with a black screen on this tablet.)
+install -m755 scripts/powerbutton-lock /usr/local/bin/
+install -m644 config/powerbutton-lock.service /etc/systemd/system/
+install -D -m644 config/50-iconia-logind.conf /etc/systemd/logind.conf.d/50-iconia.conf
+install -D -m644 config/50-iconia-powerkey.conf /etc/X11/xorg.conf.d/50-iconia-powerkey.conf
+systemctl daemon-reload
+systemctl enable --now powerbutton-lock
 
 # Auto-rotation and login-screen keyboard: LightDM hooks run for every X server
 # (login screen, user session, lock screen).

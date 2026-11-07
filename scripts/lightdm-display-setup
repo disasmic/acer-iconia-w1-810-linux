@@ -19,6 +19,16 @@ setsid sh -c '# greeter-osk
     sleep 1
   done
   sleep 2
+  # Without a window manager the keyboard takes the input focus whenever it maps
+  # its window (start, rotation, hide/show). Give it back to the greeter, so a tap
+  # on a field shows the text cursor.
+  while xwininfo -root >/dev/null 2>&1; do
+    case "$(xdotool getwindowfocus getwindowname 2>/dev/null)" in
+      Onboard*) W=$(xdotool search --onlyvisible --class lightdm-gtk-greeter | tail -n 1)
+                [ -n "$W" ] && xdotool windowfocus "$W" ;;
+    esac
+    sleep 1
+  done &
   while xwininfo -root >/dev/null 2>&1; do
     dbus-run-session onboard
     sleep 1

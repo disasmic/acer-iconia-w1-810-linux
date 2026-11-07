@@ -15,6 +15,8 @@ Step-by-step install of Debian 12 (Xfce) on the Acer Iconia Tab 8 W1-810, plus t
 | Touchscreen (Goodix) | ✅ | Works as is; optional calibration |
 | Auto-rotation (BMA222E) | ✅ | `iio-sensor-proxy` + `scripts/autorotate`, also on login and lock screens |
 | Right click | ✅ | Long press, via `scripts/longpress-rightclick` |
+| Power button | ✅ | Lock + screen off, like a phone (`scripts/powerbutton-lock`) |
+| Suspend (s2idle) | ❌ | Resumes with a black screen on kernel 6.1; not used |
 | On-screen keyboard | ✅ | `onboard` with auto-show in the session; docked keyboard on login and lock screens |
 | Cameras (2× Himax HM2056) | ❌ | No sensor driver, ISP hidden by firmware; use a USB webcam ([notes](#notes)) |
 
@@ -125,7 +127,10 @@ Then connect to Wi-Fi from the panel icon.
 - **Tap to open.** GTK3 turns touch events into emulated clicks but never into double clicks, so double tap can't open files. The desktop and Thunar use single-click mode instead, like phones and tablets: tap opens, long press opens the menu.
 - **Long press** sends the right click after the finger is held still for 0.6 s, **while it is still down**. The context menu opens and grabs the pointer, so lifting the finger doesn't "tap" the item (which would open it in single-click mode) and a multi-selection is kept.
 - **Onboard auto-show** needs `tablet-mode-detection-enabled=false`. Otherwise onboard waits for a tablet-mode switch this device doesn't have.
-- **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
+- **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. There is no window manager on the login screen, so the keyboard grabs the input focus whenever it maps its window (start, rotation); a small loop gives the focus back to the greeter, otherwise a tap on a field shows no text cursor. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
+- **Power button.** Suspend is the only sleep state (`s2idle`), and after it the DSI panel stays black, so the button doesn't sleep. `powerbutton-lock` (root service) locks the session and turns the screen off; only another press turns it on, at the lock screen. While the screen is off, the touchscreen and volume buttons are grabbed (`EVIOCGRAB`), so they can't wake it or click anything. logind is set to `HandlePowerKey=ignore`, otherwise a press on the login screen powers the tablet off. X ignores the power key device (`axp20x-pek`), otherwise the key press itself wakes the blanked screen before the service acts, and the next press turns it on and right back off. The RTC has no wake alarm, so `rtcwake` can't be used for testing.
+- **Backlight.** By default the kernel picks `acpi_video0`, which is not wired to the panel: brightness does nothing, and the backlight stays lit when the screen is off. `setup.sh` adds `acpi_backlight=native` and loads `pwm-lpss-platform` before i915 (initramfs + `softdep`), otherwise i915 logs `Failed to get the SoC PWM chip`. With `intel_backlight`, brightness works and DPMS off turns the backlight off too.
+- **Auto-rotation never sets the same rotation again**: an `xrandr` mode set wakes a blanked screen, e.g. the lock screen right after the power button turned it off.
 - **Cameras don't work and likely won't.** Both are Himax HM2056 sensors (`HIMX2056:00/01`, seen on I2C). Mainline Linux has no HM2056 driver (only an old Android port, see [kernel bug 195877](https://bugzilla.kernel.org/show_bug.cgi?id=195877)). The Bay Trail camera ISP that `atomisp` needs is not exposed at all (no PCI `8086:0f38`, no ACPI device), so there is no `/dev/video*`. A USB (UVC) webcam via the OTG hub works out of the box.
 - **Firmware blobs are not stored here.** They come from Debian packages, and the BT patch is downloaded from [LibreELEC/brcmfmac_sdio-firmware](https://github.com/LibreELEC/brcmfmac_sdio-firmware).
 
@@ -138,7 +143,12 @@ scripts/autorotate               screen + touch rotation from accelerometer
 scripts/longpress-rightclick     long press -> right click (python3-evdev, uinput)
 scripts/lightdm-display-setup    LightDM hook: autorotate + login-screen keyboard
 scripts/lightdm-session-setup    LightDM hook: close login-screen keyboard at login
-scripts/iconia-display.sh        shared helper: stop helpers of one X displayconfig/50-iconia.conf            LightDM: enables the two hooks
+scripts/iconia-display.sh        shared helper: stop helpers of one X display
+scripts/powerbutton-lock         power button: lock + screen off / screen on
+config/powerbutton-lock.service
+config/50-iconia-logind.conf     logind: don't power off on the power button
+config/iconia-backlight.conf     modprobe: load LPSS PWM before i915 (backlight)
+config/50-iconia-powerkey.conf   Xorg: ignore the power key (handled by the service)config/50-iconia.conf            LightDM: enables the two hooks
 config/longpress-rightclick.service
 config/99-touch-calibration.rules
 config/zramswap

@@ -5,7 +5,7 @@
 # (monitor-sensor, onboard) without touching other displays.
 kill_on_display() {
     for p in $(pgrep -f "$1"); do
-        tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -qx "DISPLAY=$DISPLAY" || continue
+        tr '\0' '\n' 2>/dev/null < "/proc/$p/environ" | grep -qx "DISPLAY=$DISPLAY" || continue
         kill -- "-$(ps -o pgid= -p "$p" | tr -d ' ')" 2>/dev/null
     done
 }

@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+"""Power button like on a phone: lock + screen off, press again -> screen on.
+
+Runs as root. Works on whichever X server is active: the user session, the login
+screen or the lock screen (LightDM starts the lock screen on its own X server).
+While the screen is off, the touchscreen and the volume buttons are grabbed
+(EVIOCGRAB), so their events reach neither X nor the long-press service and
+can't wake the screen.
+`powerbutton-lock --toggle` performs one press (for testing; no touch grab).
+"""
+import os, select, subprocess, sys, time, evdev
+from evdev import ecodes as e
+
+TOUCH = "Goodix"   # touchscreen name
+
+
+def sh(*cmd, display=None):
+    env = dict(os.environ)
+    if display:
+        env.update(DISPLAY=display, XAUTHORITY=f"/var/run/lightdm/root/{display}")
+    return subprocess.run(cmd, env=env, capture_output=True, text=True).stdout
+
+
+def active_session():
+    """(session id, class, X display) of the active session on seat0."""
+    sid = sh("loginctl", "show-seat", "seat0", "-p", "ActiveSession", "--value").strip()
+    props = dict(line.split("=", 1) for line in
+                 sh("loginctl", "show-session", sid, "-p", "Class", "-p", "Display").split("\n") if "=" in line)
+    return sid, props.get("Class", ""), props.get("Display", "")
+
+
+def greeter_window(display):
+    return '"lightdm-gtk-greeter"' in sh("xwininfo", "-root", "-children", display=display)
+
+
+def screen_is_on(display):
+    return "Monitor is Off" not in sh("xset", "q", display=display)
+
+
+def toggle():
+    """Returns True if the screen was turned off, False if it was turned on."""
+    sid, cls, display = active_session()
+    if not display:
+        return False
+    if not screen_is_on(display):
+        sh("xset", "dpms", "force", "on", display=display)
+        return False
+    if cls == "user":   # lock first; the lock screen comes up on another X server
+        sh("loginctl", "lock-session", sid)
+        for _ in range(100):   # up to 10 s for the lock screen and its window
+            time.sleep(0.1)
+            sid, cls, display = active_session()
+            if cls == "greeter" and display and greeter_window(display):
+                break
+        time.sleep(1)  # let the lock screen finish starting before blanking
+    sh("xset", "dpms", "force", "off", display=display)
+    return True
+
+
+def set_grab(devs, on):
+    for dev in devs:
+        try:
+            dev.grab() if on else dev.ungrab()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    if "--toggle" in sys.argv:
+        toggle()
+        sys.exit()
+    devices = list(map(evdev.InputDevice, evdev.list_devices()))
+    keys = [d for d in devices if e.KEY_POWER in d.capabilities().get(e.EV_KEY, [])]
+    # Inputs that must not wake the screen: touchscreen and volume buttons.
+    quiet = [d for d in devices if TOUCH in d.name or
+             {e.KEY_VOLUMEUP, e.KEY_VOLUMEDOWN} & set(d.capabilities().get(e.EV_KEY, []))]
+    grabbed = False
+    while True:
+        watch = keys + quiet if grabbed else keys
+        ready = select.select(watch, [], [], 1 if grabbed else None)[0]
+        if grabbed and not ready:
+            # Screen woken some other way (e.g. a USB keyboard): give inputs back.
+            if screen_is_on(active_session()[2]):
+                set_grab(quiet, False)
+                grabbed = False
+            continue
+        for dev in ready:
+            for ev in dev.read():   # events of grabbed devices are read only to drain them
+                if dev in keys and ev.type == e.EV_KEY and ev.code == e.KEY_POWER and ev.value == 1:
+                    grabbed = toggle()
+                    set_grab(quiet, grabbed)

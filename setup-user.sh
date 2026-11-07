@@ -11,6 +11,9 @@ xfconf-query -c thunar -p /misc-single-click-timeout -n -t uint -s 0   # no hove
 xfconf-query -c xsettings -p /Net/DoubleClickDistance -n -t int -s 30
 xfconf-query -c xsettings -p /Net/DoubleClickTime -n -t int -s 500
 
+# Power button is handled by the powerbutton-lock service; no logout dialog.
+xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action -n -t uint -s 0
+
 # Accessibility bus: lets onboard see which widget has focus.
 xfconf-query -c xfce4-session -p /general/StartAssistiveTechnologies -n -t bool -s true
 gsettings set org.gnome.desktop.interface toolkit-accessibility true
