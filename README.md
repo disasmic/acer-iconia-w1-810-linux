@@ -16,7 +16,7 @@ Step-by-step install of Debian 12 (Xfce) on the Acer Iconia Tab 8 W1-810, plus t
 | Auto-rotation (BMA222E) | ✅ | `iio-sensor-proxy` + `scripts/autorotate`, also on login and lock screens |
 | Right click | ✅ | Long press, via `scripts/longpress-rightclick` |
 | On-screen keyboard | ✅ | `onboard` with auto-show in the session; docked keyboard on login and lock screens |
-| Cameras | ❌ | Not tested / no driver |
+| Cameras (2× Himax HM2056) | ❌ | No sensor driver, ISP hidden by firmware; use a USB webcam ([notes](#notes)) |
 
 ## Hardware quirks to know
 
@@ -126,6 +126,7 @@ Then connect to Wi-Fi from the panel icon.
 - **Long press** sends the right click after the finger is held still for 0.6 s, **while it is still down**. The context menu opens and grabs the pointer, so lifting the finger doesn't "tap" the item (which would open it in single-click mode) and a multi-selection is kept.
 - **Onboard auto-show** needs `tablet-mode-detection-enabled=false`. Otherwise onboard waits for a tablet-mode switch this device doesn't have.
 - **Login/lock-screen keyboard.** The greeter's built-in keyboard (`onboard --xid`) turns black after rotation. Instead, a LightDM `display-setup-script` starts a docked, always-on-top onboard as root once the greeter window appears, and `session-setup-script` closes it at login. Because it runs as root, its Preferences and Quit are locked down. The × button hides it behind a small floating icon. The lock screen runs on its own X server (`:1`), so the hooks only touch processes of their own display.
+- **Cameras don't work and likely won't.** Both are Himax HM2056 sensors (`HIMX2056:00/01`, seen on I2C). Mainline Linux has no HM2056 driver (only an old Android port, see [kernel bug 195877](https://bugzilla.kernel.org/show_bug.cgi?id=195877)). The Bay Trail camera ISP that `atomisp` needs is not exposed at all (no PCI `8086:0f38`, no ACPI device), so there is no `/dev/video*`. A USB (UVC) webcam via the OTG hub works out of the box.
 - **Firmware blobs are not stored here.** They come from Debian packages, and the BT patch is downloaded from [LibreELEC/brcmfmac_sdio-firmware](https://github.com/LibreELEC/brcmfmac_sdio-firmware).
 
 ## Files
