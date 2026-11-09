@@ -1,5 +1,5 @@
 [Unit]
-Description=Power button: lock and turn the screen off
+Description=Power button: lock and turn the screen off; sleep on battery
 After=systemd-logind.service
 
 [Service]

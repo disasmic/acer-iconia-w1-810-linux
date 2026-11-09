@@ -46,8 +46,8 @@ grep -q 'acpi_backlight=native' /etc/default/grub ||
 update-initramfs -u
 update-grub
 
-# Power button like on a phone: lock + screen off. logind must not power off.
-# (Suspend/s2idle resumes with a black screen on this tablet.)
+# Power button and sleep like on a phone: lock + screen off; on battery, s2idle
+# 15 s after the screen goes off. logind must not power off.
 install -m755 scripts/powerbutton-lock /usr/local/bin/
 install -m644 config/powerbutton-lock.service /etc/systemd/system/
 install -D -m644 config/50-iconia-logind.conf /etc/systemd/logind.conf.d/50-iconia.conf

@@ -1,5 +1,12 @@
 #!/usr/bin/python3
-"""Power button like on a phone: lock + screen off, press again -> screen on.
+"""Power button and sleep like on a phone.
+
+Press: lock + screen off; press again -> screen on.
+On battery, once the screen has been off (by the button or by the idle timeout)
+for SLEEP_AFTER seconds, the tablet suspends (s2idle). The power button wakes it,
+and the screen comes back on at the lock screen. On the charger it stays awake.
+A logind "sleep" block inhibitor (e.g. `systemd-inhibit --what=sleep sleep 1h`)
+keeps it awake on battery too.
 
 Runs as root. Works on whichever X server is active: the user session, the login
 screen or the lock screen (LightDM starts the lock screen on its own X server).
@@ -8,10 +15,12 @@ touch-gestures) and the volume buttons are grabbed (EVIOCGRAB), so their events
 don't reach X and can't wake the screen.
 `powerbutton-lock --toggle` performs one press (for testing; no touch grab).
 """
-import os, select, subprocess, sys, time, evdev
+import glob, os, select, subprocess, sys, time, evdev
 from evdev import ecodes as e
 
 TOUCH = "iconia-touch"   # virtual mouse made by touch-gestures (it grabs the real touchscreen)
+SLEEP_AFTER = 15         # seconds with the screen off on battery before suspending
+CHECK_EVERY = 5          # seconds between screen/battery checks while the screen is on
 
 
 def sh(*cmd, display=None):
@@ -34,7 +43,10 @@ def greeter_window(display):
 
 
 def screen_is_on(display):
-    return "Monitor is Off" not in sh("xset", "q", display=display)
+    """DPMS Standby/Suspend/Off all mean a dark panel (the idle timeout uses Standby).
+    If the state can't be read (no display), count it as on: never sleep by mistake."""
+    out = sh("xset", "q", display=display)
+    return "Monitor is" not in out or "Monitor is On" in out
 
 
 def toggle():
@@ -55,6 +67,30 @@ def toggle():
         time.sleep(1)  # let the lock screen finish starting before blanking
     sh("xset", "dpms", "force", "off", display=display)
     return True
+
+
+def on_battery():
+    """No charger online (any power supply that is not the battery itself)."""
+    for ps in glob.glob("/sys/class/power_supply/*"):
+        try:
+            with open(f"{ps}/type") as t, open(f"{ps}/online") as o:
+                if t.read().strip() != "Battery" and o.read().strip() == "1":
+                    return False
+        except OSError:
+            pass
+    return True
+
+
+def sleep_blocked():
+    """Someone holds a logind "sleep" block inhibitor."""
+    out = sh("busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+             "org.freedesktop.login1.Manager", "BlockInhibited")   # s "what1:what2"
+    return "sleep" in out.strip().strip('s "').split(":")
+
+
+def slept_for():
+    """Total time spent suspended since boot: BOOTTIME counts it, MONOTONIC doesn't."""
+    return time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
 
 
 def set_grab(devs, on):
@@ -78,15 +114,19 @@ if __name__ == "__main__":
     keys = [d for d in map(evdev.InputDevice, evdev.list_devices())
             if e.KEY_POWER in d.capabilities().get(e.EV_KEY, [])]
     quiet, grabbed = [], False
+    off_since = None   # when the screen was first seen off on battery
+    next_check = 0
+    slept = slept_for()
     while True:
         watch = keys + quiet if grabbed else keys
-        ready = select.select(watch, [], [], 1 if grabbed else None)[0]
-        if grabbed and not ready:
-            # Screen woken some other way (e.g. a USB keyboard): give inputs back.
-            if screen_is_on(active_session()[2]):
-                set_grab(quiet, False)
-                grabbed = False
-            continue
+        ready = select.select(watch, [], [], 1 if grabbed else CHECK_EVERY)[0]
+        if slept_for() - slept > 1:
+            # Just resumed. The press that woke the tablet never reaches us,
+            # so turn the screen on here (it comes up at the lock screen).
+            slept = slept_for()
+            sh("xset", "dpms", "force", "on", display=active_session()[2])
+            set_grab(quiet, False)
+            quiet, grabbed, off_since = [], False, None
         for dev in ready:
             for ev in dev.read():   # events of grabbed devices are read only to drain them
                 if dev in keys and ev.type == e.EV_KEY and ev.code == e.KEY_POWER and ev.value == 1:
@@ -94,3 +134,19 @@ if __name__ == "__main__":
                     grabbed = toggle()
                     quiet = quiet_devices() if grabbed else []
                     set_grab(quiet, grabbed)
+                    off_since, next_check = None, 0
+        if time.monotonic() < next_check:
+            continue
+        next_check = time.monotonic() + 1
+        if screen_is_on(active_session()[2]):
+            # Woken some other way (e.g. a USB keyboard): give inputs back.
+            set_grab(quiet, False)
+            quiet, grabbed, off_since = [], False, None
+        elif not on_battery() or sleep_blocked():
+            off_since = None
+        elif off_since is None:
+            off_since = time.monotonic()
+        elif time.monotonic() - off_since >= SLEEP_AFTER:
+            # light-locker locks an unlocked session on the way down.
+            subprocess.run(["systemctl", "suspend"])
+            off_since = None   # if it didn't sleep, try again after SLEEP_AFTER
